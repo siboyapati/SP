@@ -1,0 +1,265 @@
+USE [BOSS]
+GO
+/****** Object:  UserDefinedFunction [dbo].[ufn_GetProductPrice2]    Script Date: 06/06/2014 14:31:00 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+-- =============================================
+-- Author:	 <Siva>
+-- Create date: <Create Date, ,>
+-- Description:	<Description, ,>
+-- =============================================
+ALTER FUNCTION [dbo].[ufn_GetProductPrice2]
+(
+@ItemNumber varchar(15),	
+@RepNumber char(2),
+@CurrencyCode char(1),
+@CustomerNumber varchar(7)
+)
+RETURNS decimal(10,2)
+AS
+BEGIN
+
+ DECLARE @Cuxfer   VARCHAR(7),
+         @Price    NUMERIC(10,2),
+         @INLPR    NUMERIC(10,2), -- List Price
+         @CUXLOC	  VARCHAR(255),
+         @IPFCCD   VARCHAR(255),
+         @IPFCCD_1 VARCHAR(255),
+         @IPFCCD_2 VARCHAR(255),
+         @IPFC_1   VARCHAR(255),
+         @IPFC_2   VARCHAR(255),
+         @IPFC_3   VARCHAR(255),
+         @IPFC_4   VARCHAR(255)
+-------------------------------------------------	
+--if cuxfer = @cust.no, then do below part else execute more lower part
+
+-------------------------------------------------------
+
+
+ SELECT @Cuxfer = [CUXFER] --Transfer Account
+ FROM   [qantel].[dbo].[CUSTOMER]
+ WHERE  [CUNO] = [CUXFER];
+
+ SELECT @CUXLOC = [CUXLOC] --TransferPrice Location
+ FROM   [qantel].[dbo].[CUSTOMER]
+ WHERE  [CUNO] = @CustomerNumber 
+ AND    [CUNO] = [CUXFER]
+
+ SELECT @IPFCCD = SUBSTRING(CUFCCD, 4, 1) --CURRENCYCODE like 2,3,4,6
+ FROM   [qantel].[dbo].[CUSTOMER]
+ WHERE  [CUNO] = @CustomerNumber
+   AND  [CUNO] = [CUXFER]
+
+ SELECT @IPFC_1 = SUBSTRING(CUFCCD, 1, 2) --Currency Code like CA,CN,EU , AU , GB
+ FROM   [qantel].[dbo].[CUSTOMER]
+ WHERE  [CUNO] = @CustomerNumber
+   AND  [CUNO] = [CUXFER]
+
+ SELECT @IPFC_2 = REPLACE('CAD1', 'CAD1', 'CD') -- Currencey Code Canada as CD
+ FROM   [qantel].[dbo].[CUSTOMER]
+ WHERE  [CUNO] = @CustomerNumber
+   AND  [CUNO] = [CUXFER]
+   AND  [CUFCCD] = 'CAD1'
+
+ SELECT @IPFC_3 = 'US'   --Currency code US
+ FROM   [qantel].[dbo].[CUSTOMER]
+ WHERE  [CUNO] = @CustomerNumber
+   AND  [CUNO] = [CUXFER]
+   AND  
+   (
+           [CUFCCD]    = ''
+           OR [CUFCCD] = 'USD'
+   )   
+ 
+SELECT @IPFC_4=  SUBSTRING(CUFCCD, 2, 2)	--Currency code BP
+FROM [qantel].[dbo].[CUSTOMER]
+WHERE [CUNO] = @CustomerNumber
+AND [CUNO] = [CUXFER]
+AND  ([CUFCCD] = 'GBP4' OR  [CUFCCD] = 'GBP8')
+
+ 
+SELECT @IPFCCD_1=SUBSTRING(CUFCCD, 4,1)
+FROM [qantel].[dbo].[CUSTOMER]
+WHERE [CUNO] = @CustomerNumber
+AND [CUNO] = [CUXFER]
+ --If @Cuxfer = @CustomerNumber
+--
+--If @CustomerNumber IS NOT NULL    
+
+--IPDIV =2 Dealer Price.
+--IPDIV =1 Transfer Price.
+
+
+--OG Customer we are showing transfer price  CUXLOC(Transfer price location) If CUXLOC = ‘ ‘
+--IG Customer we are showing dealer price 
+-- IG customers vs OG Customers
+
+
+--This part is for the IG Customer
+
+ If @CustomerNumber IN 
+ (
+   SELECT [CUXFER]
+   FROM   [qantel].[dbo].[CUSTOMER]
+   WHERE  [CUXFER] = [CUNO] --CUNO :CustomerNumber; CUXFER:TransferAccount
+     AND  [CUNO] = @CustomerNumber  
+ )
+ BEGIN
+   SELECT  @Price = [IPPRC]
+   FROM    [qantel].[dbo].[REPITM]
+   WHERE
+   (
+     [IPITM]       = @ItemNumber
+     AND  [IPDIV]  = 2  --Added
+     AND  [IPREP]  = @CUXLOC
+     AND  [IPFCCD] = @IPFCCD_1
+     AND  [IPFC]   = @IPFC_1
+   )
+   OR
+   (
+     [IPREP]      = @CUXLOC
+     AND [IPDIV]  = 2 
+     AND [IPFCCD] = @IPFCCD_1
+     AND [IPFC]   = @IPFC_2
+     AND [IPITM]  = @ItemNumber
+   )
+   OR
+   (
+     [IPREP]      = @CUXLOC
+     AND [IPDIV]  = 2 
+     AND [IPFC]   = @IPFC_3
+     --AND [IPFCCD] = 
+     AND IPITM    = @ItemNumber
+   )
+   OR
+   (
+     [IPREP]      = @CUXLOC
+     AND [IPDIV]  = 2 
+     AND [IPFCCD] = @IPFCCD_1
+     AND [IPFC]   = @IPFC_4
+     AND IPITM    = @ItemNumber
+   )
+ END
+
+-----------------------------------------------------------
+-- this is else part for the OG Customer
+-----------------------------------------------------------
+ ELSE
+ BEGIN
+   SELECT @INLPR = [Price]	
+   FROM   [qantel].[dbo].[tblAllParts]
+   WHERE  [Part] = @ItemNumber
+
+   IF @RepNumber < 80 AND @CurrencyCode = '' AND (NULLIF(@CUXLOC, '') IS NULL) --Region1 --- currency code alone cannot satisfy region 1 guarantee @CurrencyCode = ''
+   BEGIN
+   -- Rep(17, 23, 40)
+
+     If @RepNumber IN (17,23,40) AND @CurrencyCode = ''
+     BEGIN 
+
+       SELECT @Price = [IPPRC]
+       FROM   [qantel].[dbo].[REPITM]
+       WHERE  [IPITM] = @ItemNumber 
+         AND  [IPREP] = @RepNumber 
+         AND  [IPFCCD] = @CurrencyCode 
+         AND  [IPDIV] = 1
+
+       If @Price IS NULL
+       BEGIN
+         SET @Price = @INLPR
+       END
+     END 
+     ELSE
+     BEGIN
+       SET @Price = @INLPR;
+--todo:
+
+     END
+-- Rep(17, 23, 40)
+
+--SET @Price = 5 --@INLPR;
+   END
+   ELSE
+   BEGIN
+--
+--	 SELECT
+--	 @Price = [IPPRC]
+--	 FROM
+--	 [qantel].[dbo].[REPITM]
+--	 WHERE
+--	 [IPITM] = @ItemNumber AND
+--	 [IPREP] = @RepNumber AND
+----	 CASE 
+----	 WHEN @CUREP BETWEEN '30' AND '39'
+----	 THEN @CUTREP ELSE @CUREP
+----	 END AND
+--	 [IPFCCD] = @CurrencyCode AND --RIGHT(@CUFCCD, 1) AND
+--	 [IPDIV] = 1;
+
+--	 IF @Price IS NULL
+--	 BEGIN	
+--	 -- Find exchange rate in XCHG file and apply
+--	 -- to @INLPR to get price.
+--
+--	 DECLARE @ExchangeRate numeric(10,6);
+--
+--	 SET @ExchangeRate = 1;
+--
+--	 SELECT
+--	 @ExchangeRate = [XCRATE]
+--	 FROM
+--	 [qantel].[dbo].[XCHG]
+--	 WHERE
+--	 [XCCD] = @CurrencyCode AND --RIGHT(@CUFCCD, 1) AND
+--	 [XCDIV] = 1;
+--
+--	 SET @Price = @INLPR * @ExchangeRate;
+
+--END	
+
+
+
+     SELECT @Price = [IPPRC]
+     FROM   [qantel].[dbo].[REPITM]
+     WHERE
+     (
+       [IPITM]      =  @ItemNumber
+       AND [IPDIV]  =  1  --Added
+       AND [IPREP]  =  @CUXLOC
+       AND [IPFCCD] = @IPFCCD_1
+       AND [IPFC]   = @IPFC_1
+     )
+     OR 
+     (
+       [IPREP]      = @CUXLOC
+       AND [IPDIV]  = 1
+       AND [IPFCCD] = @IPFCCD_1
+       AND [IPFC]   = @IPFC_2
+       AND [IPITM] =  @ItemNumber
+     )
+     OR 
+     (
+       [IPREP]      = @CUXLOC
+       AND [IPDIV]  = 1
+       AND [IPFC]   = @IPFC_3
+       --AND [IPFCCD] = @IPFCCD_2
+       AND IPITM    = @ItemNumber
+     )
+     OR 
+     (
+       [IPREP]      = @CUXLOC
+       AND [IPDIV]  = 1
+       AND [IPFCCD] = @IPFCCD_1
+       AND [IPFC]   = @IPFC_4
+       AND IPITM    = @ItemNumber
+     )
+   END 
+ END 
+
+RETURN @Price;
+
+END

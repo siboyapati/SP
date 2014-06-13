@@ -1,0 +1,208 @@
+USE [BOSS]
+GO
+/****** Object:  StoredProcedure [dbo].[usp_Product_Price_By_GroupID_RegionID_Select]    Script Date: 06/04/2014 21:17:36 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+-- =============================================
+-- Author: Matt Bates
+-- Create date: 01/22/2008
+-- Description:	Returns the MSRP, Dealer, and Discounted prices 
+-- for the given Product for the given Group and Region.
+-- =============================================
+ALTER PROCEDURE [dbo].[usp_Product_Price_By_GroupID_RegionID_Select]
+	
+@ProductID int,
+@GroupID int,
+@RegionID tinyint
+
+AS
+
+BEGIN	
+	SET NOCOUNT ON;
+	
+	DECLARE
+		@CustomerNumber varchar(7),
+		@ItemNumber varchar(15),
+		@ReturnValue int,
+		@CustomDiscount decimal(4,2),
+		@ShowDealerPrice bit,
+	    @Markup decimal(4,2),
+		@ShowDiscountedPrice bit,
+		@ParentUserGroupCustomerNumber VARCHAR(7);
+	
+	DECLARE @MSRP_MarkUp  decimal(4,2);	
+	IF (@RegionID IN (1, 5, 15))
+    BEGIN
+        SET @MSRP_MarkUp = 1.66;		
+    END
+		ELSE
+    BEGIN
+        SET @MSRP_MarkUp = 1.42;		
+    END
+
+		 
+
+	SELECT
+		@ItemNumber = p.[model]
+	FROM
+		[webproducts].[dbo].[tblProducts] p
+	INNER JOIN
+		[dbo].[ProductRegion] pr
+	ON
+		pr.[ProductID] = p.[modelID]
+	WHERE
+		p.[modelID] = @ProductID AND
+		pr.[RegionID] = @RegionID;
+	
+	SELECT
+		@CustomerNumber = [CustomerNumber],
+		@CustomDiscount = [Discount],
+		@ShowDealerPrice = [ShowDealerPrice],
+		@ShowDiscountedPrice = [ShowDiscountPrice],
+		@Markup=[Markup],
+		@ParentUserGroupCustomerNumber = [ParentUserGroupCustomerNumber]
+	FROM
+		[dbo].[Group]
+	WHERE
+		[GroupID] = @GroupID;
+
+	EXECUTE @ReturnValue = dbo.usp_Validate_Price_Or_Discount_Request @ItemNumber, @CustomerNumber, 1;	
+
+	IF @ReturnValue > -1
+	BEGIN
+		DECLARE 
+			@RepNumber char(2),
+			@CurrencyCode char(1),
+			@CurrencySymbol char(8),
+			@CurrencyName varchar(20)
+
+		SELECT
+			@RepNumber = r.[RepNumber],
+			@CurrencyCode = c.[Code],
+			@CurrencySymbol = c.[Symbol],
+			@CurrencyName = c.[Name]
+		FROM
+			[dbo].[Region] r
+		INNER JOIN
+			[dbo].[Currency] c
+		ON
+			c.[CurrencyID] = r.[CurrencyID]
+		WHERE
+			[RegionID] = @RegionID;	
+
+		DECLARE 
+			@Price decimal(10,2),
+			@TransferPrice decimal(10,2),
+			@TPDP decimal(10,2), -- Transfer price or Discounted price
+			@Discount decimal(3,1),
+			@IsRep bit,
+			@IsGsaPriceable bit,
+			@GsaPrice decimal(10,2);
+
+		SELECT
+			--@Price = dbo.ufn_GetProductPrice(@ItemNumber, @RepNumber, @CurrencyCode),
+			
+			@Price = dbo.ufn_GetProductPrice2(@ItemNumber, @RepNumber, @CurrencyCode,@CustomerNumber),	
+			@TransferPrice=dbo.Ufn_getproducttransferprice(@ItemNumber, @RepNumber, @CurrencyCode,@CustomerNumber),			
+			@Discount = dbo.ufn_GetProductDiscount(@ItemNumber, @CustomerNumber, @CustomDiscount); 			
+			
+			IF @CustomerNumber IN (SELECT [cuxfer] 
+                             FROM   [qantel].[dbo].[customer] 
+                             WHERE  [cuxfer] = [cuno]                                    
+                                    AND [cuno] = @CustomerNumber) 
+                                    
+                 BEGIN                 
+                  SET @TPDP=@TransferPrice;
+                  PRINT 'price: ';                  
+                  Print @Price;
+                  PRINT 'Discount from function: ';                  
+                  Print @Discount;
+                  PRINT 'transfer price: ';                  
+                  Print @TransferPrice;
+                  PRINT 'Item Number: '
+                  Print @ItemNumber;
+                  PRINT 'Rep Number: '
+                  Print @RepNumber;
+                  PRINT 'Currency Code: '
+                  Print @CurrencyCode;
+                  PRINT 'Customer Number: '
+                  Print @CustomerNumber;
+                 END                 
+              ELSE
+				 BEGIN					   	
+				   Print 'discounted price:'	;		
+				   PRINT 'price: ';                  
+                   Print @Price;
+                   PRINT 'Discount from function: ';                  
+                   Print @Discount;
+                   PRINT 'transfer price: ';                  
+                   Print @TransferPrice;		   
+                   SET @TPDP=(@Price * (1 + (ISNULL(@Markup,0)/100))*(1 - (@Discount / 100)));;
+                   print @TPDP;
+                  END 
+			
+			
+			
+
+		SET @IsRep = --CAST((SELECT TOP 1 [CUAINFO] FROM [qantel].[dbo].[customer] WHERE [CUNO] = @CustomerNumber AND [CUAINFO] LIKE '%R%') AS BIT);
+			CASE
+				WHEN EXISTS(SELECT TOP 1 [CUAINFO] FROM [qantel].[dbo].[customer] WHERE [CUNO] = @CustomerNumber AND [CUAINFO] LIKE '%R%') 
+				THEN 1
+				ELSE 0
+			END
+
+		SET @IsGsaPriceable =
+			CASE
+				WHEN ([dbo].[ufn_GetGsaCustomer](@CustomerNumber)=1 OR @GroupID=3020 OR @IsRep=1) AND [dbo].[ufn_GetGsaItem](@ItemNumber)=1 --3020 is the GSA group
+				THEN 1
+				ELSE 0
+			END
+
+		SET @GsaPrice = CAST((SELECT TOP 1 [GSPRC] FROM [qantel].[dbo].[GSAPRT] WHERE GSITM=@ItemNumber) as varchar(20));
+
+		IF (@GroupID = 2 OR @ReturnValue = 2)
+			AND
+		   NOT ((@CustomerNumber = '' Or @CustomerNumber IS NULL))-- AND @CustomDiscount > 0)
+		BEGIN
+			Print 'Customer not in qantel';
+			SELECT
+				ROUND(CAST(@Price * @MSRP_MarkUp AS decimal(10,2)),0) AS [MSRP],
+				0.00 AS [DealerPrice],
+				0.00 AS [DiscountedPrice],
+				@CurrencyName AS [CurrencyName],
+				@CurrencySymbol AS [CurrencySymbol],
+				@IsGsaPriceable  as [IsGsaPriceable],
+				@GsaPrice as [GsaPrice],
+				@ShowDealerPrice as [ShowDealerPrice],
+				@ShowDiscountedPrice as [ShowDiscountPrice];
+				--ROUND(CAST(@Price * 1.66 AS decimal(10,2)),0) * 0.60 * 1.0075 as [GsaPrice];--MSRP * .6 * 1.0075
+		END
+		ELSE
+		BEGIN
+			Print 'Customer is in qantel';
+			DECLARE @MSRPPrice as decimal(10,2)
+			SET @MSRPPrice = ROUND(CAST(@Price * @MSRP_MarkUp AS decimal(10,2)),0)
+			SELECT
+			@MSRPPrice AS [MSRP],				
+			@Price  AS [DealerPrice],
+			@Markup As [Markup],
+			@Discount As [discount],
+			@ItemNumber As [ItemNumber],			
+			@CustomerNumber As [CustomerNumber],
+			@CustomDiscount As [CustomDiscount],
+			--CAST(@Price * (1 + (ISNULL(@Markup,0)/100))*(1 - (@Discount / 100)) AS decimal(10,2)) AS [DiscountedPrice],					
+			
+			@TPDP As [DiscountedPrice],
+			@CurrencyName AS [CurrencyName],
+			@CurrencySymbol AS [CurrencySymbol],
+			@IsGsaPriceable as [IsGsaPriceable],
+			@GsaPrice as [GsaPrice],
+			@ShowDealerPrice as [ShowDealerPrice],
+			@ShowDiscountedPrice as [ShowDiscountPrice];
+			--@MSRPPrice * 0.60 * 1.0075 as [GsaPrice];
+		END
+	END		
+END

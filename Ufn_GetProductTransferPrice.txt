@@ -1,0 +1,70 @@
+USE [BOSS] 
+
+go 
+
+/****** Object:  UserDefinedFunction [dbo].[ufn_GetProductPrice2]    Script Date: 05/29/2014 18:58:15 ******/ 
+SET ansi_nulls ON 
+
+go 
+
+SET quoted_identifier ON 
+
+go 
+
+-- ============================================= 
+-- Author:    
+-- Create date:  
+-- Description:   
+-- ============================================= 
+ALTER FUNCTION [dbo].[Ufn_GetProductTransferPrice] (@ItemNumber     VARCHAR(15), 
+                                                     @RepNumber      CHAR(2), 
+                                                     @CurrencyCode   CHAR(1), 
+                                                     @CustomerNumber VARCHAR(7)) 
+returns DECIMAL(10, 2) 
+AS 
+  BEGIN 
+      DECLARE @Cuxfer   VARCHAR(7), 
+              @Price    NUMERIC(10, 2), 
+              @INLPR    NUMERIC(10, 2),-- List Price 
+              @CUXLOC   VARCHAR(255)
+             
+
+      -------------------------------------------------   
+      --if cuxfer = @cust.no, then do below part else execute more lower part 
+      ------------------------------------------------------- 
+      SELECT @Cuxfer = [cuxfer] --Transfer Account 
+      FROM   [qantel].[dbo].[customer] 
+      WHERE  [cuno] = [cuxfer]; 
+
+      SELECT @CUXLOC = [cuxloc] --TransferPrice Location 
+      FROM   [qantel].[dbo].[customer] 
+      WHERE  [cuno] = @CustomerNumber 
+             AND [cuno] = [cuxfer] 
+     
+
+      --If @Cuxfer = @CustomerNumber 
+      -- 
+      --If @CustomerNumber IS NOT NULL     
+      --IPDIV =2 Dealer Price. 
+      --IPDIV =1 Transfer Price. 
+      --OG Customer we are showing transfer price  CUXLOC(Transfer price location) If CUXLOC = ? ? 
+      --IG Customer we are showing dealer price  
+      -- IG customers vs OG Customers 
+      --This part is for the IG Customer 
+      IF @CustomerNumber IN (SELECT [cuxfer] 
+                             FROM   [qantel].[dbo].[customer] 
+                             WHERE  [cuxfer] = [cuno] 
+                                    --CUNO :CustomerNumber; CUXFER:TransferAccount 
+                                    AND [cuno] = @CustomerNumber) 
+        BEGIN 
+            SELECT @Price = [ipprc] 
+            FROM   [qantel].[dbo].[repitm] 
+            WHERE  ( [ipitm] = @ItemNumber 
+                     AND [ipdiv] = 1 --Added 
+                     AND [iprep] = @CUXLOC 
+                     AND [ipitm] = @ItemNumber)
+                      
+        END 
+
+      RETURN @Price; 
+  END 
