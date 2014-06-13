@@ -1,0 +1,285 @@
+USE [BOSS]
+GO
+/****** Object:  StoredProcedure [dbo].[usp_Product_PriceList_Select]    Script Date: 06/12/2014 17:04:39 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+-- =============================================
+-- Author: Matt Bates
+-- Create date: 07/01/2008
+-- Description:	Used to generate XLS/CSV price lists.
+-- =============================================
+ALTER PROCEDURE [dbo].[usp_Product_PriceList_Select]
+	
+@ProductCategoryID smallint = NULL, --level 1
+@ProductTypeID smallint = NULL, -- level 2
+@ProductFamilyID smallint = NULL, -- level 3
+@RegionID tinyint,
+@CustomerNumber varchar(7),
+@ShowCurrency bit,
+@CustomDiscount decimal(4,2),--custom dealer discount entered in the price list options
+@GroupCustomDiscount decimal(4,2)--if a group has no customer number then they might have a set discount entered in the Group table
+AS
+
+BEGIN	
+
+--SET @ProductTypeID = 790;
+--SET @ProductFamilyID = 609;
+--SET @ProductCategoryID = 608
+
+	SET NOCOUNT ON;
+
+	SELECT DISTINCT
+		p.[ModelID],
+		p.[model] AS [ModelNumber],
+		pc4.[Category] AS [ProductCategory],
+		--pc4.[ID],	
+		pc3.[Category] AS [ProductType],
+		--pc3.[ID],	
+		pc2.[Category] AS [ProductFamily],	
+		--pc2.[ID],
+		p.[descr] AS [Description],
+		p.[ScheduleBNumber],
+		p.[CountryOfOrigin],
+		p.[ECCNumber],
+		p.[UPCNumber],
+		p.[Weight],
+		p.[Length],
+		p.[Width],
+		p.[Height],
+		c.[Symbol] as CurrencySymbol,	
+		mds.[Desc50] as ShortDescription,
+		--DEALER PRICE
+		CASE 
+			WHEN @ShowCurrency = 1
+			THEN c.[Symbol] + ' ' 
+			ELSE ''
+		END
+		+ CAST(CAST
+		(
+			CASE 
+				WHEN r.[RepNumber] < 80 AND c.[Code] = '' 
+				THEN --ap.[Price]
+			--Rep (17, 23, 40)
+					CASE
+						WHEN r.[RepNumber] IN (17,23,40) AND c.[Code] = ''
+						THEN ri.[IPPRC]
+						ELSE COALESCE(ap.[Price], ap.[Price])
+						END 
+			--Rep (17, 23, 40)
+
+				ELSE COALESCE(ri.[IPPRC], x.[XCRATE] * ap.[Price])
+			END AS decimal(10,0)) AS varchar(20)
+		) AS [DealerPrice],
+		--END DEALER PRICE
+		--MSRP
+		CASE 
+			WHEN @ShowCurrency = 1
+			THEN c.[Symbol] + ' ' 
+			ELSE ''
+		END 
+		+ CAST(CAST
+		(
+			CASE 
+				WHEN r.[RepNumber] < 80 AND c.[Code] = '' 
+				THEN --ap.[Price]
+			--Rep (17, 23, 40)
+					CASE
+						WHEN r.[RepNumber] IN (17,23,40) AND c.[Code] = ''
+						THEN ri.[IPPRC]
+						ELSE COALESCE(ap.[Price], ap.[Price])
+						END 
+			--Rep (17, 23, 40)
+
+				ELSE COALESCE(ri.[IPPRC], x.[XCRATE] * ap.[Price])
+			END * 1.66 AS decimal(10,0)) AS varchar(20)
+		) AS [MSRP],
+		--END MSRP
+		--Discounted Price
+		CASE 
+			WHEN @ShowCurrency = 1
+			THEN c.[Symbol] + ' ' 
+			ELSE ''
+		END
+		+ CAST(CAST(CAST(CASE 
+						WHEN r.[RepNumber] < 80 AND c.[Code] = '' 
+						THEN --ap.[Price]
+			--Rep (17, 23, 40)
+					CASE
+						WHEN r.[RepNumber] IN (17,23,40) AND c.[Code] = ''
+						THEN ri.[IPPRC]
+						ELSE COALESCE(ap.[Price], ap.[Price])
+						END 
+			--Rep (17, 23, 40)
+
+						ELSE COALESCE(ri.[IPPRC], x.[XCRATE] * ap.[Price])
+					END AS decimal(10,2)) * (1 - (dbo.ufn_GetProductDiscount(p.[model], @CustomerNumber, @GroupCustomDiscount) / 100)) AS decimal(10,2)) as varchar(20)) AS [DiscountedPrice],
+		--END DISCOUNTED PRICE
+		--GSA Price
+		CASE 
+			WHEN @ShowCurrency = 1
+			THEN c.[Symbol] + ' ' 
+			ELSE ''
+		END
+		+ 
+		CAST((SELECT TOP 1 [GSPRC] FROM [qantel].[dbo].[GSAPRT] WHERE GSITM=p.[model]) AS varchar(20)) AS [GsaPrice], -- GSA Price is MSRP * 0.60 * 1.0075
+		--END GSA PRICE
+		--CUSTOM PRICE
+		CASE 
+			WHEN @ShowCurrency = 1
+			THEN c.[Symbol] + ' ' 
+			ELSE ''
+		END
+		+ CAST(CAST(CAST
+		(
+			CASE 
+				WHEN r.[RepNumber] < 80 AND c.[Code] = '' 
+				THEN --ap.[Price]
+			--Rep (17, 23, 40)
+					CASE
+						WHEN r.[RepNumber] IN (17,23,40) AND c.[Code] = ''
+						THEN ri.[IPPRC]
+						ELSE COALESCE(ap.[Price], ap.[Price])
+						END 
+			--Rep (17, 23, 40)
+
+				ELSE COALESCE(ri.[IPPRC], x.[XCRATE] * ap.[Price])
+			END AS decimal(10,0)) * ((100 - @CustomDiscount)/100) as decimal(10,2)) AS varchar(20)
+		) AS [CustomDiscount]
+		--END CUSTOM PRICE
+	FROM
+		[webproducts].[dbo].[tblProducts] p
+	LEFT OUTER JOIN
+		[webproducts].[dbo].[trelModel_Category] mc
+	ON
+		mc.[ModelID] = p.[modelID]
+	LEFT OUTER JOIN
+		[webproducts].[dbo].[tblProductCategories] pc
+	ON
+		pc.[ID] = mc.[ProdCatID]
+	LEFT OUTER JOIN
+		[webproducts].[dbo].[tblProductCategories] pc2
+	ON
+		pc2.[ID] = pc.[parentId]
+	LEFT OUTER JOIN
+		[webproducts].[dbo].[tblProductCategories] pc3
+	ON
+		pc3.[ID] = pc2.[parentId]
+	LEFT OUTER JOIN
+		[webproducts].[dbo].[tblProductCategories] pc4
+	ON
+		pc4.[ID] = pc3.[parentId]
+	INNER JOIN
+		[dbo].[ProductRegion] pr
+	ON
+		pr.[ProductID] = p.[modelID]
+	INNER JOIN
+		[dbo].[Region] r
+	ON
+		r.[RegionID] = pr.[RegionID]
+	INNER JOIN
+		[dbo].[Currency] c
+	ON
+		c.[CurrencyID] = r.[CurrencyID]
+	INNER JOIN
+		[qantel].[dbo].[tblAllParts] ap
+	ON
+		ap.[Part] = p.[model]
+	LEFT OUTER JOIN
+		[qantel].[dbo].[REPITM] ri
+	ON
+		ri.[IPITM] = p.[Model] AND
+		ri.[IPREP] = CAST(r.[RepNumber] AS char(2)) AND
+		ri.[IPFCCD] = c.[Code] AND
+		ri.[IPDIV] = 1
+	LEFT OUTER JOIN
+		[qantel].[dbo].[XCHG] x
+	ON
+		x.[XCCD] = c.[Code] AND
+		x.[XCDIV] = 1
+	LEFT OUTER JOIN
+		[DeptMarketingMDS].[dbo].[tbl_Desc] mds
+	ON
+		p.[model] = mds.[Item]
+
+	WHERE
+--		(@ProductCategoryID IS NULL OR pc4.[ID] = @ProductCategoryID) AND
+--		(@ProductTypeID IS NULL OR pc3.[ID] = @ProductTypeID) AND	
+--		(@ProductFamilyID IS NULL OR pc2.[ID] = @ProductFamilyID) AND
+
+		(
+			(--product category
+				(--category is empty
+					@ProductCategoryID IS NULL
+				)
+				OR
+				(--category matches
+					pc4.[ID] IS NOT NULL
+					AND
+					pc4.[ID] = @ProductCategoryID 
+				)
+			) AND
+
+			(--product type
+				(
+					@ProductTypeID IS NULL
+				)
+				OR
+				(		
+					pc3.[ID] IS NOT NULL
+					AND
+					pc3.[ID] = @ProductTypeID
+				)
+			) AND
+
+			(--product type
+				(
+					@ProductFamilyID IS NULL
+				)
+				OR
+				(		
+					pc2.[ID] IS NOT NULL
+					AND
+					pc2.[ID] = @ProductFamilyID
+				)
+			) 
+		)AND
+
+		r.[RegionID] = @RegionID
+	ORDER BY
+		[ModelNumber],
+		[ProductCategory],
+		[ProductType],
+		[ProductFamily];
+	
+	
+
+END
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
